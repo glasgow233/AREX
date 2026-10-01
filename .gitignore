@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+ext/
+ckpt_ext/
+data/
+runs/
+logs/
+*.pt
+*.pth
+*.npz
+*.npy
+*.jpg
+*.png

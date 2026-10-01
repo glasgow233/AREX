@@ -1,0 +1,15 @@
+# Versions used for the paper (Python 3.11, CUDA 12.8, one NVIDIA GH200 per run).
+torch==2.11.0
+torchvision==0.26.0
+diffusers==0.36.0
+transformers==4.57.6
+accelerate==1.14.0
+huggingface_hub==0.36.2
+safetensors==0.8.0
+numpy==2.4.6
+scipy==1.17.1
+pillow==12.3.0
+timm==1.0.29          # SiT model definition
+pyarrow==25.0.1       # ImageNet parquet shards (sit_moments_imagenet.py)
+sentencepiece==0.2.2  # SANA text encoder
+protobuf==7.36.1
