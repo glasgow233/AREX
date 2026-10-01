@@ -17,6 +17,8 @@ ap.add_argument("--steps", type=int, default=20, help="sampling steps of the fac
 ap.add_argument("--cfg", type=float, default=4.5)
 ap.add_argument("--out", default="runs/sana512_latents")
 A = ap.parse_args()
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+A.out = A.out if os.path.isabs(A.out) else os.path.join(ROOT, A.out)      # relative to the repo root
 t0 = time.time(); el = lambda: f"[{(time.time()-t0)/60:6.1f} min]"
 MODEL = "Efficient-Large-Model/Sana_600M_512px_diffusers"
 DEV = "cuda"
@@ -78,6 +80,9 @@ else:
     prompts = [f"{subj[rng.integers(len(subj))]}, {style[rng.integers(len(style))]}, {extra[rng.integers(len(extra))]}"
                for _ in range(2000)]
     json.dump(prompts, open(PROMPTS, "w"))
+if A.n % len(prompts):
+    print(f"  WARNING: n={A.n} is not a multiple of {len(prompts)} prompts; sana_moments.py needs a multiple "
+          f"(it groups latents by prompt)", flush=True)
 print(f"\n{el()} === sampling {A.n} latents, bs={A.bs} ===", flush=True)
 
 @torch.no_grad()
@@ -95,8 +100,8 @@ def run_batch(ps, seed):
     return out["z"]
 
 shards = sorted(p for p in os.listdir(A.out) if p.startswith("z_"))
-start = len(shards) * 1000
-print(f"  {len(shards)} shards present, starting at {start}", flush=True)
+start = sum(torch.load(os.path.join(A.out, p), mmap=True).shape[0] for p in shards)
+print(f"  {len(shards)} shards present ({start} latents), starting at {start}", flush=True)
 buf = []
 try:
     for i0 in range(start, A.n, A.bs):
@@ -110,4 +115,8 @@ try:
 except Exception:
     traceback.print_exc()
     print(f"{el()} interrupted; the shards written so far remain usable", flush=True)
+if buf:                                                     # flush the last, shorter shard
+    Z = torch.cat(buf); k = len([p for p in os.listdir(A.out) if p.startswith("z_")])
+    torch.save(Z, os.path.join(A.out, f"z_{k:04d}.pt"))
+    print(f"  {el()} saved z_{k:04d}.pt  {tuple(Z.shape)} (final shard)", flush=True)
 print(f"\n{el()} done")

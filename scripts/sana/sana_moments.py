@@ -18,6 +18,8 @@ ap.add_argument("--bs", type=int, default=32)
 ap.add_argument("--cfg", type=float, default=4.5)
 ap.add_argument("--alpha_prompts", default="512:1024", help="prompt slice used to fit alpha")
 A = ap.parse_args()
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+A.out = A.out if os.path.isabs(A.out) else os.path.join(ROOT, A.out)      # relative to the repo root
 t0 = time.time(); el = lambda: f"[{(time.time()-t0)/60:5.1f}m]"
 OUT, P, DEV = A.out, A.prompts, "cuda"
 

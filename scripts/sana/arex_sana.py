@@ -42,7 +42,10 @@ ap.add_argument("--ref_only", action="store_true", help="compute the FID referen
 ap.add_argument("--tag", default="", help="extra tag in the result key")
 A = ap.parse_args()
 DEV = "cuda"; t0 = time.time(); el = lambda: f"[{(time.time()-t0)/60:6.1f}m]"
-MJ = "data/test/PG-eval-data/MJHQ-30K"
+rp = lambda q: q if os.path.isabs(q) else os.path.join(ROOT, q)     # relative paths are taken from the repo root
+for k in ("out", "sbar_file", "alpha_file", "keys_file"):
+    if getattr(A, k): setattr(A, k, rp(getattr(A, k)))
+MJ = os.path.join(ROOT, "data", "test", "PG-eval-data", "MJHQ-30K")
 OUT = A.out; os.makedirs(OUT, exist_ok=True)
 
 meta = json.load(open(f"{MJ}/meta_data.json"))
@@ -116,7 +119,8 @@ def make_field(ps, steps):
 PHI = UG = None
 if A.phi:
     lo, hi = [int(v) for v in A.phi_prompts.split(":")]
-    pk = json.load(open("runs/sana512_latents/prompts.json"))[lo:hi]
+    # the synthetic calibration prompts are stored next to the self-sampled latents and S_bar (sana_selfsample.py)
+    pk = json.load(open(os.path.join(os.path.dirname(A.sbar_file), "prompts.json")))[lo:hi]
     STEPS = 50
     ug = torch.linspace(0.0, 1.0, STEPS + 1, device=DEV)[:-1].clamp_min(0.01); h = 1.0 / STEPS
     acc = torch.zeros(STEPS, sur.d, device=DEV, dtype=torch.float64); cnt = 0
@@ -176,6 +180,24 @@ def gen_cfsc(ks, ps, seed, steps):
 SANAROOT = os.path.join(ROOT, "ext", "Sana")
 FIDPY = f"{SANAROOT}/tools/metrics/pytorch-fid/compute_fid.py"
 REFNPZ = f"{MJ}/MJHQ_30K_512px_fid_embeddings_{A.n}.npz"
+# SANA's vendored pytorch-fid loads the Inception weights from this path, relative to its working directory,
+# so compute_fid.py is run from ext/Sana and the weights are fetched there on first use.
+INCEPTION = os.path.join(SANAROOT, "output", "pretrained_models", "pt_inception-2015-12-05-6726825d.pth")
+INCEPTION_URL = "https://github.com/mseitzer/pytorch-fid/releases/download/fid_weights/pt_inception-2015-12-05-6726825d.pth"
+
+def ensure_inception():
+    if os.path.exists(INCEPTION): return
+    print(f"{el()} downloading the pytorch-fid Inception weights to {INCEPTION} ...", flush=True)
+    os.makedirs(os.path.dirname(INCEPTION), exist_ok=True)
+    torch.hub.download_url_to_file(INCEPTION_URL, INCEPTION, progress=False)
+
+def _run_fid(args):
+    return subprocess.run([sys.executable, FIDPY, "--img_size", "512", *args],
+                          capture_output=True, text=True, env=_env(), cwd=SANAROOT)
+
+def _excerpt(p):
+    lines = [l for l in (p.stdout + p.stderr).splitlines() if l.strip()]
+    return lines[-1] if lines else f"exit code {p.returncode}"
 
 def _env():
     e = dict(os.environ)
@@ -188,31 +210,31 @@ def ensure_ref():
     if os.path.exists(REFNPZ):
         print(f"{el()} reference statistics found: {REFNPZ}", flush=True); return True
     print(f"{el()} computing reference statistics ({A.n} images) ...", flush=True)
-    p = subprocess.run([sys.executable, FIDPY, "--img_size", "512",
-                        "--sample_nums", str(A.n), "--path", f"{MJ}/meta_data.json", REFNPZ,
-                        "--img_path", f"{MJ}/imgs", "--stat"],
-                       capture_output=True, text=True, env=_env())
+    p = _run_fid(["--sample_nums", str(A.n), "--path", f"{MJ}/meta_data.json", REFNPZ,
+                  "--img_path", f"{MJ}/imgs", "--stat"])
     ok = os.path.exists(REFNPZ)
-    print(f"{el()} reference statistics {'OK' if ok else 'FAILED'}: {(p.stdout+p.stderr)[-400:]}", flush=True)
+    print(f"{el()} reference statistics {'OK' if ok else 'FAILED: ' + _excerpt(p)}", flush=True)
+    if not ok: print("  compute_fid.py output (tail):\n    " + "\n    ".join((p.stdout + p.stderr).splitlines()[-15:]))
     return ok
 
 def fid(exp, img_root):
-    cmd = [sys.executable, FIDPY, "--img_size", "512",
-           "--sample_nums", str(A.n), "--path", REFNPZ, f"{MJ}/meta_data.json",
-           "--img_path", img_root, "--exp_name", exp]
-    p = subprocess.run(cmd, capture_output=True, text=True, env=_env())
+    p = _run_fid(["--sample_nums", str(A.n), "--path", REFNPZ, f"{MJ}/meta_data.json",
+                  "--img_path", img_root, "--exp_name", exp])
     for ln in (p.stdout + p.stderr).splitlines():
         if ln.startswith("FID "): return ln
-    return f"FID FAILED: {(p.stdout+p.stderr)[-400:]}"
+    print("  compute_fid.py output (tail):\n    " + "\n    ".join((p.stdout + p.stderr).splitlines()[-15:]), flush=True)
+    return f"FID FAILED: {_excerpt(p)}"
 
-if not A.no_fid and not ensure_ref():
-    sys.exit("could not compute the reference statistics")
+if not A.no_fid:
+    ensure_inception()
+    if not ensure_ref(): sys.exit("could not compute the reference statistics")
 if A.ref_only:
     print(f"{el()} --ref_only, exiting"); sys.exit(0)
 
 # Results are kept per n and merged, so pilot runs and the 30k runs never overwrite each other.
 RES = f"{OUT}/fid_n{A.n}.json"
 res = json.load(open(RES)) if os.path.exists(RES) else {}
+n_fail = 0
 for n in [int(x) for x in A.nfes.split(",")]:
     tag = "cfsc" + ("" if A.scheme == "frozen" else f"-{A.scheme}") \
                  + ("" if A.rho == 0.5 else f"-rho{A.rho}") \
@@ -236,7 +258,7 @@ for n in [int(x) for x in A.nfes.split(",")]:
     if A.no_fid:
         print(f"{el()} {exp}: generated {len(keys)} images (--no_fid)", flush=True); continue
     line = fid(exp, root)
-    res[exp] = line
+    res[exp] = line; n_fail += line.startswith("FID FAILED")
     print(f"{el()} {exp}: {line}", flush=True)
     if os.path.exists(RES):                                  # re-read before writing: parallel jobs merge
         try: res = {**json.load(open(RES)), **res}
@@ -246,3 +268,4 @@ for n in [int(x) for x in A.nfes.split(",")]:
         subprocess.run(["rm", "-rf", d])
 print(f"\n{el()} === summary ===")
 for k, v in res.items(): print(f"  {k:>28}  {v}")
+if n_fail: sys.exit(f"{n_fail} FID computation(s) failed (see the compute_fid.py output above)")

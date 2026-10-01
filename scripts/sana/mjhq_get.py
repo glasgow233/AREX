@@ -6,7 +6,8 @@ The dataset is gated on Hugging Face: accept its terms and log in (huggingface-c
 import os, json, time, sys
 t0 = time.time(); el = lambda: f"[{(time.time()-t0)/60:5.1f}m]"
 from huggingface_hub import snapshot_download
-DST = "data/test/PG-eval-data/MJHQ-30K"
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+DST = os.path.join(ROOT, "data", "test", "PG-eval-data", "MJHQ-30K")
 os.makedirs(DST, exist_ok=True)
 try:
     p = snapshot_download(repo_id="playgroundai/MJHQ-30K", repo_type="dataset", local_dir=DST, max_workers=8)

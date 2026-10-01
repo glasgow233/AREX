@@ -51,7 +51,9 @@ Checkpoints and data are placed as follows (none of them is redistributed here).
 | Hugging Face cache | `benjamin-paine/imagenet-1k-256x256` shards (ImageNet-1k train, 256px) | downloaded and deleted shard by shard by `sit_moments.py` |
 | Hugging Face cache | `Efficient-Large-Model/Sana_600M_512px_diffusers` | downloaded on first use (`export HF_HOME=$PWD/ckpt_ext/hf`) |
 
-The pytorch-fid Inception weights are downloaded to `~/.cache/torch/hub/checkpoints/` on first use.
+The pytorch-fid Inception weights are downloaded on first use: to `~/.cache/torch/hub/checkpoints/` for
+CIFAR-10 and ImageNet, and to `ext/Sana/output/pretrained_models/` for SANA, which is where SANA's metric
+toolkit expects them.
 
 ## Reproducing the AREX rows of the paper
 

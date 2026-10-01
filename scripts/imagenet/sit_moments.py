@@ -14,7 +14,8 @@ import os, sys, io, time, json, argparse, numpy as np, torch
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT); sys.path.insert(0, os.path.join(ROOT, "ext", "sit"))
 ap = argparse.ArgumentParser()
-ap.add_argument("--shards", type=int, default=40)
+ap.add_argument("--shards", type=int, default=40, help="number of parquet shards of the dataset")
+ap.add_argument("--max-shards", type=int, default=0, help="process only the first k shards (quick check); 0 = all")
 ap.add_argument("--bs", type=int, default=128)
 ap.add_argument("--workers", type=int, default=16)
 ap.add_argument("--tmp", default=os.path.join(ROOT, "runs", "imagenet_tmp"))
@@ -39,7 +40,7 @@ class Rows(Dataset):
     def __getitem__(self, i):
         im = Image.open(io.BytesIO(self.imgs[i]["bytes"])).convert("RGB")
         if im.size != (256, 256): im = im.resize((256, 256), Image.LANCZOS)
-        return torch.from_numpy(np.asarray(im, dtype=np.uint8)).permute(2, 0, 1), int(self.labels[i])
+        return torch.from_numpy(np.array(im, dtype=np.uint8)).permute(2, 0, 1), int(self.labels[i])
 
 vae = AutoencoderKL.from_pretrained(os.path.join(CKPT_DIR, "sd-vae-ft-mse")).to(DEV).eval()
 g_vae = torch.Generator(device=DEV).manual_seed(0)
@@ -48,7 +49,7 @@ S = torch.zeros(1000, d, dtype=torch.float64, device=DEV)   # per-class sums
 n = torch.zeros(1000, dtype=torch.float64, device=DEV)
 N = 0; t_enc = 0.0; t_acc = 0.0
 os.makedirs(A.tmp, exist_ok=True)
-for si in range(A.shards):
+for si in range(min(A.shards, A.max_shards) if A.max_shards else A.shards):
     fn = f"data/train-{si:05d}-of-{A.shards:05d}.parquet"
     p = hf_hub_download(REPO, fn, repo_type="dataset", local_dir=A.tmp)
     tab = pq.read_table(p, columns=["image", "label"])
@@ -75,10 +76,12 @@ del vae; torch.cuda.empty_cache()
 
 # ---------------------------------------------------------------- moments
 m1 = (S.sum(0) / N)
-mu_c = S / n[:, None]
+present = n > 0; K = int(present.sum())              # K = 1000 on the full training set; fewer with --max-shards
+if K < 1000: print(f"  NOTE: only {K}/1000 classes present; absent classes get mu(c) = m1 (quick check only)", flush=True)
+mu_c = torch.where(present[:, None], S / n.clamp_min(1)[:, None], m1[None, :])
 Sig1 = ((G - N * torch.outer(m1, m1)) / (N - 1)).cpu()
-Sbar = ((G - (mu_c.T * n) @ mu_c) / (N - 1000)).cpu()
-Cov_mu = ((mu_c - m1).T @ (mu_c - m1) / (1000 - 1)).cpu()
+Sbar = ((G - (mu_c.T * n) @ mu_c) / (N - K)).cpu()
+Cov_mu = ((mu_c[present] - m1).T @ (mu_c[present] - m1) / max(K - 1, 1)).cpu()
 print(f"{el()} tr Sigma_1 = {Sig1.trace():.1f}   tr S_bar = {Sbar.trace():.1f}   tr Cov_c(mu) = {Cov_mu.trace():.1f}"
       f"   between-class share = {100*Cov_mu.trace()/(Sbar.trace()+Cov_mu.trace()):.1f}%   n_c min/max {int(n.min())}/{int(n.max())}", flush=True)
 t0 = time.time()
@@ -93,7 +96,7 @@ def summ(name, lam):
           f"  kappa(0.5) {kappa(lam):6.2f}  std/mean {lam.std()/lam.mean():.2f}", flush=True)
     return dict(lam_max=float(lam[0]), median=float(lam[lam.numel()//2]), n_above_1=int((lam>1).sum()), kappa=kappa(lam),
                 std_over_mean=float(lam.std()/lam.mean()))
-stats = {"w": W, "source": f"ImageNet train, all images + flips ({REPO}), N={N}",
+stats = {"w": W, "source": f"ImageNet train, {'all' if not A.max_shards else f'first {A.max_shards}/{A.shards} shards of the'} images + flips ({REPO}), N={N}",
          "N_latents": N, "encode_min": t_enc / 60, "ms_per_encode": 1000 * t_enc / N, "accumulate_min": t_acc / 60,
          "between_share": float(Cov_mu.trace()/(Sbar.trace()+Cov_mu.trace())),
          "tr": {"Sigma1": float(Sig1.trace()), "Sbar": float(Sbar.trace()), "Cov_mu": float(Cov_mu.trace())}}

@@ -10,6 +10,6 @@ numpy==2.4.6
 scipy==1.17.1
 pillow==12.3.0
 timm==1.0.29          # SiT model definition
-pyarrow==25.0.1       # ImageNet parquet shards (sit_moments_imagenet.py)
+pyarrow==25.0.1       # ImageNet parquet shards (scripts/imagenet/sit_moments.py)
 sentencepiece==0.2.2  # SANA text encoder
 protobuf==7.36.1
